@@ -1,0 +1,225 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+#define JOY_Y A1
+#define JOY_BTN 2
+#define BUZZER 3
+
+// Player
+int playerY = 40;
+int jumpY = 0;
+bool jumping = false;
+bool ducking = false;
+int jumpSpeed = 0;
+
+// Obstacles
+int obstacleX = SCREEN_WIDTH;
+int obstacleY = 42;
+int obstacleType = 0;
+int scrollSpeed = 4;
+
+// Clouds
+int cloudX1 = 30, cloudY1 = 10;
+int cloudX2 = 90, cloudY2 = 5;
+
+// Game state
+bool crashed = false;
+bool win = false;
+unsigned long score = 0;
+unsigned long lastSpeedIncrease = 0;
+
+const int WIN_SCORE = 50;  // 🏁 Win after 50 obstacles
+
+void setup() {
+  pinMode(JOY_Y, INPUT);
+  pinMode(JOY_BTN, INPUT_PULLUP);
+  pinMode(BUZZER, OUTPUT);
+  randomSeed(analogRead(0));
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    for (;;);
+  }
+
+  introScreen();
+}
+
+void loop() {
+  if (crashed) {
+    showGameOver();
+    return;
+  }
+
+  if (win) {
+    showWinScreen();
+    return;
+  }
+
+  display.clearDisplay();
+  int joyY = analogRead(JOY_Y);
+
+  // Jump
+  if (!jumping && joyY < 300) {
+    jumping = true;
+    jumpSpeed = -10;
+    tone(BUZZER, 900, 100);
+  }
+
+  // Duck
+  ducking = (!jumping && joyY > 700);
+
+  // Jump physics
+  if (jumping) {
+    jumpY += jumpSpeed;
+    jumpSpeed += 1;
+    if (jumpY >= 0) {
+      jumpY = 0;
+      jumping = false;
+    }
+  }
+
+  // Move obstacle
+  obstacleX -= scrollSpeed;
+  if (obstacleX < -10) {
+    obstacleX = SCREEN_WIDTH + random(20, 60);
+    obstacleType = random(0, 3);
+    if (obstacleType == 0) obstacleY = 42;
+    else if (obstacleType == 1) obstacleY = 38;
+    else obstacleY = 28;
+    score++;
+    tone(BUZZER, 600, 40);
+
+    // 🏁 Check win
+    if (score >= WIN_SCORE) {
+      win = true;
+      tone(BUZZER, 1000, 300);
+      delay(100);
+      tone(BUZZER, 1200, 300);
+      delay(100);
+      tone(BUZZER, 1400, 400);
+    }
+  }
+
+  // Speed increase
+  if (millis() - lastSpeedIncrease > 5000 && scrollSpeed < 8) {
+    scrollSpeed++;
+    lastSpeedIncrease = millis();
+  }
+
+  // Move clouds
+  cloudX1 -= 1;
+  cloudX2 -= 1;
+  if (cloudX1 < -20) cloudX1 = SCREEN_WIDTH + random(0, 20);
+  if (cloudX2 < -20) cloudX2 = SCREEN_WIDTH + random(0, 20);
+
+  // Collision
+  int playerTop = playerY + jumpY;
+  int playerBottom = playerTop + (ducking ? 6 : 10);
+
+  if (obstacleX < 20 && obstacleX > 8) {
+    if (obstacleType == 2) { // flying
+      if (playerTop < obstacleY + 6 && playerTop > obstacleY - 8)
+        crash();
+    } else { // ground
+      if (playerBottom > 50)
+        crash();
+    }
+  }
+
+  // Draw
+  display.drawLine(0, 50, SCREEN_WIDTH, 50, SSD1306_WHITE);
+  drawCloud(cloudX1, cloudY1);
+  drawCloud(cloudX2, cloudY2);
+
+  if (ducking)
+    display.fillRect(10, playerY + jumpY + 4, 10, 6, SSD1306_WHITE);
+  else
+    display.fillRect(10, playerY + jumpY, 8, 10, SSD1306_WHITE);
+
+  if (obstacleType == 0)
+    display.fillRect(obstacleX, 42, 6, 8, SSD1306_WHITE);
+  else if (obstacleType == 1)
+    display.fillRect(obstacleX, 36, 6, 14, SSD1306_WHITE);
+  else
+    display.fillRect(obstacleX, obstacleY, 8, 5, SSD1306_WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(90, 0);
+  display.print(score);
+
+  display.display();
+  delay(35);
+}
+
+void drawCloud(int x, int y) {
+  display.drawCircle(x, y, 3, SSD1306_WHITE);
+  display.drawCircle(x + 4, y + 2, 3, SSD1306_WHITE);
+  display.drawCircle(x - 4, y + 2, 3, SSD1306_WHITE);
+}
+
+void crash() {
+  crashed = true;
+  tone(BUZZER, 200, 600);
+}
+
+void introScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(20, 20);
+  display.print("RUNNER DASH+");
+  display.setCursor(10, 35);
+  display.print("Jump & Duck to Survive");
+  display.setCursor(25, 50);
+  display.print("Press button...");
+  display.display();
+  while (digitalRead(JOY_BTN) == HIGH);
+  delay(200);
+}
+
+void showGameOver() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(30, 20);
+  display.print("GAME OVER");
+  display.setCursor(25, 35);
+  display.print("Score: ");
+  display.print(score);
+  display.setCursor(5, 50);
+  display.print("Press button to retry");
+  display.display();
+
+  if (digitalRead(JOY_BTN) == LOW) resetGame();
+}
+
+void showWinScreen() {
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(25, 20);
+  display.print("YOU WIN!");
+  display.setTextSize(1);
+  display.setCursor(30, 45);
+  display.print("Score: ");
+  display.print(score);
+  display.setCursor(5, 57);
+  display.print("Press button to restart");
+  display.display();
+
+  if (digitalRead(JOY_BTN) == LOW) resetGame();
+}
+
+void resetGame() {
+  crashed = false;
+  win = false;
+  score = 0;
+  obstacleX = SCREEN_WIDTH;
+  jumpY = 0;
+  jumping = false;
+  scrollSpeed = 4;
+  delay(300);
+}
